@@ -1,7 +1,7 @@
-import { App, TFile, MarkdownView, Component, WorkspaceLeaf } from 'obsidian';
+import { App, TFile, MarkdownView, Component } from 'obsidian';
 
 /**
- * 基于百分比的同步滚动管理器
+ * 简化的百分比同步滚动
  */
 export class ScrollSyncManager extends Component {
     private app: App;
@@ -9,8 +9,7 @@ export class ScrollSyncManager extends Component {
     private currentFile: TFile | null = null;
     private syncEnabled: boolean = false;
     private isSyncing: boolean = false;
-    private lastSyncTime: number = 0;
-    private editorScrollHandler: (() => void) | null = null;
+    private checkInterval: number | null = null;
 
     constructor(app: App) {
         super();
@@ -33,13 +32,20 @@ export class ScrollSyncManager extends Component {
     initialize(previewEl: HTMLElement, currentFile: TFile): void {
         this.previewEl = previewEl;
         this.currentFile = currentFile;
+        console.log('[ScrollSync] 初始化完成');
     }
 
     private startSync(): void {
-        if (!this.previewEl) return;
+        if (!this.previewEl) {
+            console.log('[ScrollSync] 预览元素不存在');
+            return;
+        }
         
+        // 绑定预览滚动
         this.previewEl.addEventListener('scroll', this.handlePreviewScroll, { passive: true });
-        this.startEditorScrollSync();
+        
+        // 使用定时轮询监听编辑器滚动（更可靠）
+        this.startEditorPolling();
         
         console.log('[ScrollSync] 同步已开启');
     }
@@ -47,180 +53,111 @@ export class ScrollSyncManager extends Component {
     private stopSync(): void {
         if (!this.previewEl) return;
         this.previewEl.removeEventListener('scroll', this.handlePreviewScroll);
-        this.stopEditorScrollSync();
-    }
-
-    private startEditorScrollSync(): void {
-        const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
-        if (!activeView || !this.currentFile) return;
-        if (activeView.file?.path !== this.currentFile.path) return;
-
-        // 获取 CodeMirror 实例 (CM5 或 CM6)
-        const cm = this.getCodeMirror(activeView);
-        if (!cm) {
-            console.log('[ScrollSync] 无法获取 CodeMirror');
-            return;
-        }
-
-        this.editorScrollHandler = () => {
-            if (!this.syncEnabled || this.isSyncing || !this.previewEl) return;
-            
-            const scrollInfo = this.getScrollInfo(cm);
-            if (!scrollInfo) return;
-            
-            const percentage = scrollInfo.height > 0 ? scrollInfo.top / scrollInfo.height : 0;
-            this.syncPreviewToPercentage(percentage);
-        };
-
-        // 绑定滚动事件
-        if (cm.on) {
-            cm.on('scroll', this.editorScrollHandler);
-        }
-    }
-
-    private stopEditorScrollSync(): void {
-        if (!this.editorScrollHandler) return;
         
-        const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
-        if (!activeView) return;
-        
-        const cm = this.getCodeMirror(activeView);
-        if (cm && cm.off && this.editorScrollHandler) {
-            cm.off('scroll', this.editorScrollHandler);
+        if (this.checkInterval) {
+            window.clearInterval(this.checkInterval);
+            this.checkInterval = null;
         }
         
-        this.editorScrollHandler = null;
+        console.log('[ScrollSync] 同步已关闭');
     }
 
     /**
-     * 获取 CodeMirror 实例（兼容 CM5 和 CM6）
+     * 轮询监听编辑器滚动位置
      */
-    private getCodeMirror(view: MarkdownView): any {
-        // 尝试多种方式获取 CodeMirror
-        const editor = view.editor as any;
+    private startEditorPolling(): void {
+        let lastEditorScroll = -1;
         
-        // 方式1: 直接访问 cm
-        if (editor.cm) return editor.cm;
-        
-        // 方式2: 通过 editor 的 cm 属性（CM6 可能不同）
-        if (editor.editor) return editor.editor;
-        
-        // 方式3: 查找 DOM 中的 CodeMirror 元素
-        const container = view.containerEl;
-        const cmEl = container.querySelector('.cm-editor, .CodeMirror');
-        if (cmEl) {
-            // @ts-ignore
-            return cmEl.CodeMirror || (cmEl as any).cm;
-        }
-        
-        return null;
+        this.checkInterval = window.setInterval(() => {
+            if (!this.syncEnabled || this.isSyncing || !this.previewEl || !this.currentFile) return;
+            
+            const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+            if (!activeView || activeView.file?.path !== this.currentFile.path) return;
+            
+            // 获取编辑器滚动容器
+            const editorContainer = activeView.containerEl.querySelector('.cm-scroller, .CodeMirror-scroll');
+            if (!editorContainer) return;
+            
+            const scrollTop = editorContainer.scrollTop;
+            const scrollHeight = editorContainer.scrollHeight - editorContainer.clientHeight;
+            
+            if (scrollHeight <= 0) return;
+            
+            // 只有滚动变化较大时才同步
+            if (Math.abs(scrollTop - lastEditorScroll) > 30) {
+                lastEditorScroll = scrollTop;
+                const percentage = scrollTop / scrollHeight;
+                this.syncPreviewToPercentage(percentage);
+            }
+        }, 100) as unknown as number;
     }
 
     /**
-     * 获取滚动信息（兼容 CM5 和 CM6）
+     * 处理预览滚动
      */
-    private getScrollInfo(cm: any): { top: number; height: number; clientHeight: number } | null {
-        try {
-            // CM5: scrollInfo() 方法
-            if (typeof cm.scrollInfo === 'function') {
-                return cm.scrollInfo();
-            }
-            
-            // CM6: 通过 view 对象
-            if (cm.view && cm.view.viewState) {
-                const { top, height, clientHeight } = cm.view.viewState;
-                return { top, height, clientHeight };
-            }
-            
-            // 直接访问 scrollTop 等属性
-            if (cm.scrollTop !== undefined) {
-                return {
-                    top: cm.scrollTop,
-                    height: cm.scrollHeight || cm.getScrollHeight?.(),
-                    clientHeight: cm.clientHeight
-                };
-            }
-        } catch (e) {
-            console.error('[ScrollSync] 获取滚动信息失败:', e);
-        }
-        
-        return null;
-    }
-
-    /**
-     * 设置编辑器滚动位置
-     */
-    private setEditorScroll(cm: any, top: number): void {
-        try {
-            // CM5: scrollTo(x, y)
-            if (typeof cm.scrollTo === 'function') {
-                cm.scrollTo(null, top);
-                return;
-            }
-            
-            // CM6: 通过 dispatch
-            if (cm.view && cm.view.dispatch) {
-                cm.view.dispatch({ effects: [] }); // 需要特定的 scroll effect
-                cm.view.scrollDOM.scrollTop = top;
-                return;
-            }
-            
-            // 直接设置
-            if (cm.scrollTop !== undefined) {
-                cm.scrollTop = top;
-            }
-        } catch (e) {
-            console.error('[ScrollSync] 设置滚动位置失败:', e);
-        }
-    }
-
     private handlePreviewScroll = (): void => {
         if (!this.syncEnabled || this.isSyncing || !this.previewEl) return;
-        
-        const now = Date.now();
-        if (now - this.lastSyncTime < 50) return;
-        this.lastSyncTime = now;
         
         this.isSyncing = true;
         
         const scrollTop = this.previewEl.scrollTop;
         const scrollHeight = this.previewEl.scrollHeight - this.previewEl.clientHeight;
-        const percentage = scrollHeight > 0 ? scrollTop / scrollHeight : 0;
         
+        if (scrollHeight <= 0) {
+            this.isSyncing = false;
+            return;
+        }
+        
+        const percentage = scrollTop / scrollHeight;
         this.syncEditorToPercentage(percentage);
         
         setTimeout(() => {
             this.isSyncing = false;
-        }, 50);
+        }, 100);
     };
 
+    /**
+     * 同步编辑器到指定百分比
+     */
     private syncEditorToPercentage(percentage: number): void {
         if (!this.currentFile) return;
         
         const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
         if (!activeView || activeView.file?.path !== this.currentFile.path) return;
-
-        const cm = this.getCodeMirror(activeView);
-        if (!cm) return;
-
-        const scrollInfo = this.getScrollInfo(cm);
-        if (!scrollInfo) return;
-
-        const targetScrollTop = percentage * scrollInfo.height;
-        this.setEditorScroll(cm, targetScrollTop);
+        
+        // 获取编辑器滚动容器
+        const editorContainer = activeView.containerEl.querySelector('.cm-scroller, .CodeMirror-scroll');
+        if (!editorContainer) {
+            console.log('[ScrollSync] 未找到编辑器滚动容器');
+            return;
+        }
+        
+        const scrollHeight = editorContainer.scrollHeight - editorContainer.clientHeight;
+        if (scrollHeight <= 0) return;
+        
+        const targetScrollTop = percentage * scrollHeight;
+        editorContainer.scrollTop = targetScrollTop;
+        
+        console.log('[ScrollSync] 预览→编辑器:', Math.round(percentage * 100) + '%');
     }
 
+    /**
+     * 同步预览到指定百分比
+     */
     private syncPreviewToPercentage(percentage: number): void {
         if (!this.previewEl) return;
         
         const scrollHeight = this.previewEl.scrollHeight - this.previewEl.clientHeight;
-        if (scrollHeight > 0) {
-            this.isSyncing = true;
-            this.previewEl.scrollTop = percentage * scrollHeight;
-            setTimeout(() => {
-                this.isSyncing = false;
-            }, 50);
-        }
+        if (scrollHeight <= 0) return;
+        
+        this.isSyncing = true;
+        this.previewEl.scrollTop = percentage * scrollHeight;
+        
+        console.log('[ScrollSync] 编辑器→预览:', Math.round(percentage * 100) + '%');
+        
+        setTimeout(() => {
+            this.isSyncing = false;
+        }, 100);
     }
 
     destroy(): void {
