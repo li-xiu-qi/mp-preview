@@ -179,9 +179,9 @@ export class TemplateManager {
             el.setAttribute('style', styles.link);
         });
 
-        // 应用强调样式
+        // 应用强调样式（修复加粗字体：强制使用当前选中的字体）
         element.querySelectorAll('strong').forEach(el => {
-            el.setAttribute('style', styles.emphasis.strong);
+            el.setAttribute('style', `${styles.emphasis.strong} font-family: ${this.currentFont} !important;`);
         });
         element.querySelectorAll('em').forEach(el => {
             el.setAttribute('style', styles.emphasis.em);
