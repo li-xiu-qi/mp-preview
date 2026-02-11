@@ -3,6 +3,51 @@ import MPPlugin from '../main';
 import { Template } from '../templateManager';
 import { TemplatePreviewModal } from './templatePreviewModal';
 
+/**
+ * 颜色处理工具函数
+ */
+function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
+    const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+    return result ? {
+        r: parseInt(result[1], 16),
+        g: parseInt(result[2], 16),
+        b: parseInt(result[3], 16)
+    } : null;
+}
+
+function rgbToHex(r: number, g: number, b: number): string {
+    return "#" + ((1 << 24) + (Math.round(r) << 16) + (Math.round(g) << 8) + Math.round(b)).toString(16).slice(1);
+}
+
+/**
+ * 调整颜色亮度
+ * @param hex 十六进制颜色
+ * @param factor 调整因子：正值变亮，负值变暗
+ */
+function adjustBrightness(hex: string, factor: number): string {
+    const rgb = hexToRgb(hex);
+    if (!rgb) return hex;
+    
+    const r = Math.max(0, Math.min(255, rgb.r + factor * 255));
+    const g = Math.max(0, Math.min(255, rgb.g + factor * 255));
+    const b = Math.max(0, Math.min(255, rgb.b + factor * 255));
+    
+    return rgbToHex(r, g, b);
+}
+
+/**
+ * 根据主题色生成强调色系列
+ * @param primaryColor 主题主色
+ * @returns 包含深色、中色、浅色的色值对象
+ */
+function generateEmphasisColors(primaryColor: string): { strong: string; em: string; del: string } {
+    return {
+        strong: adjustBrightness(primaryColor, -0.3),  // 深色（加粗）
+        em: primaryColor,                               // 中色（斜体）
+        del: adjustBrightness(primaryColor, 0.25)       // 浅色（删除线）
+    };
+}
+
 export class CreateTemplateModal extends Modal {
     private template: Template;
     private onSubmit: (template: Template) => void;
@@ -359,10 +404,11 @@ export class CreateTemplateModal extends Modal {
                         // 更新段落颜色
                         styles.paragraph = styles.paragraph.replace(/color:\s*#[a-fA-F0-9]+/, `color: ${value}`);
 
-                        // 更新强调文字颜色
-                        Object.keys(styles.emphasis).forEach(key => {
-                            styles.emphasis[key] = styles.emphasis[key].replace(/color:\s*#[a-fA-F0-9]+/, `color: ${value}`);
-                        });
+                        // 更新强调文字颜色（自动生成深浅变化）
+                        const emphasisColors = generateEmphasisColors(value);
+                        styles.emphasis.strong = styles.emphasis.strong.replace(/color:\s*#[a-fA-F0-9]+/, `color: ${emphasisColors.strong}`);
+                        styles.emphasis.em = styles.emphasis.em.replace(/color:\s*#[a-fA-F0-9]+/, `color: ${emphasisColors.em}`);
+                        styles.emphasis.del = styles.emphasis.del.replace(/color:\s*#[a-fA-F0-9]+/, `color: ${emphasisColors.del}`);
 
                         // 更新标题颜色
                         ['h1', 'h2', 'h3', 'base'].forEach(level => {
