@@ -1,10 +1,11 @@
-import { ItemView, WorkspaceLeaf, MarkdownRenderer, TFile, setIcon } from 'obsidian';
+import { ItemView, WorkspaceLeaf, MarkdownRenderer, TFile, setIcon, Notice } from 'obsidian';
 import { MPConverter } from './converter';
 import { CopyManager } from './copyManager';
 import type { TemplateManager } from './templateManager';
 import { DonateManager } from './donateManager';
 import type { SettingsManager } from './settings/settings';
 import { BackgroundManager } from './backgroundManager';
+import { ScrollSyncManager } from './scrollSync';
 export const VIEW_TYPE_MP = 'mp-preview';
 
 export class MPView extends ItemView {
@@ -21,6 +22,8 @@ export class MPView extends ItemView {
     private fontSizeSelect: HTMLInputElement;
     private backgroundManager: BackgroundManager;
     private customBackgroundSelect: HTMLElement;
+    private scrollSyncManager: ScrollSyncManager;
+    private scrollSyncButton: HTMLButtonElement | null = null;
 
     constructor(
         leaf: WorkspaceLeaf, 
@@ -31,6 +34,7 @@ export class MPView extends ItemView {
         this.templateManager = templateManager;
         this.settingsManager = settingsManager;
         this.backgroundManager = new BackgroundManager(this.settingsManager);
+        this.scrollSyncManager = new ScrollSyncManager(this.app);
     }
 
     getViewType() {
@@ -63,9 +67,15 @@ export class MPView extends ItemView {
         setIcon(this.lockButton, 'lock');
         this.lockButton.setAttribute('aria-label', '开启实时预览状态');
         this.lockButton.addEventListener('click', () => this.togglePreviewLock());
-    
 
-        
+        // 同步滚动按钮
+        this.scrollSyncButton = controlsGroup.createEl('button', {
+            cls: 'mp-scroll-sync-button',
+            attr: { 'aria-label': '开启同步滚动', title: '同步滚动：点击预览跳转编辑器' }
+        });
+        setIcon(this.scrollSyncButton, 'link');
+        this.scrollSyncButton.addEventListener('click', () => this.toggleScrollSync());
+    
         // 添加背景选择器
         const backgroundOptions = [
             { value: '', label: '无背景' },
@@ -425,6 +435,11 @@ export class MPView extends ItemView {
         this.templateManager.applyTemplate(this.previewEl);
         this.backgroundManager.applyBackground(this.previewEl);
 
+        // 初始化同步滚动
+        if (this.currentFile) {
+            this.scrollSyncManager.initialize(this.previewEl, this.currentFile);
+        }
+
         // 根据滚动位置决定是否自动滚动
         if (isAtBottom) {
             // 如果用户在底部附近，自动滚动到底部
@@ -507,5 +522,26 @@ export class MPView extends ItemView {
     // 获取字体选项
     private getFontOptions() {
         return this.settingsManager.getFontOptions();
+    }
+
+    // 切换同步滚动
+    private toggleScrollSync(): void {
+        const isEnabled = !this.scrollSyncManager['syncEnabled'];
+        this.scrollSyncManager.setEnabled(isEnabled);
+        
+        // 更新按钮状态
+        if (this.scrollSyncButton) {
+            if (isEnabled) {
+                this.scrollSyncButton.classList.add('active');
+                this.scrollSyncButton.setAttribute('aria-label', '关闭同步滚动');
+                setIcon(this.scrollSyncButton, 'unlink');
+                new Notice('同步滚动已开启：点击预览元素可跳转编辑器');
+            } else {
+                this.scrollSyncButton.classList.remove('active');
+                this.scrollSyncButton.setAttribute('aria-label', '开启同步滚动');
+                setIcon(this.scrollSyncButton, 'link');
+                new Notice('同步滚动已关闭');
+            }
+        }
     }
 }
