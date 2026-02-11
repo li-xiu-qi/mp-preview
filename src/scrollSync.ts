@@ -1,21 +1,22 @@
-import { App, MarkdownRenderer, TFile } from 'obsidian';
+import { App, TFile, MarkdownView } from 'obsidian';
 
 /**
- * 基于锚点的同步滚动管理器
+ * 基于行号的同步滚动管理器
  * 
  * 原理：
- * 1. 给预览中的每个块级元素（标题、段落、列表等）添加 data-source-line 属性
- * 2. 监听编辑器滚动，获取当前顶部的行号
- * 3. 在预览中找到对应的 data-source-line 元素并滚动到视口
+ * 1. 建立 Markdown 行号到预览元素的映射
+ * 2. 监听预览滚动，找到当前最顶部的可见元素
+ * 3. 获取该元素对应的源文件行号
+ * 4. 同步编辑器滚动到对应行
  */
 export class ScrollSyncManager {
     private app: App;
     private previewEl: HTMLElement | null = null;
-    private editorEl: HTMLElement | null = null;
+    private currentFile: TFile | null = null;
     private syncEnabled: boolean = false;
-    private isScrolling: boolean = false;
-    private lineMap: Map<number, HTMLElement> = new Map();
-    private observer: MutationObserver | null = null;
+    private isSyncing: boolean = false;
+    private lineToElementMap: Map<number, HTMLElement> = new Map();
+    private lastScrollTop: number = 0;
 
     constructor(app: App) {
         this.app = app;
@@ -33,117 +34,98 @@ export class ScrollSyncManager {
         }
     }
 
+    isEnabled(): boolean {
+        return this.syncEnabled;
+    }
+
     /**
      * 初始化同步
      */
-    initialize(previewEl: HTMLElement, currentFile: TFile): void {
+    async initialize(previewEl: HTMLElement, currentFile: TFile): Promise<void> {
         this.previewEl = previewEl;
-        this.buildLineMap();
-        this.injectSourceLineAttributes(currentFile);
+        this.currentFile = currentFile;
+        this.lineToElementMap.clear();
+        
+        // 延迟一下等待渲染完成
+        setTimeout(() => {
+            this.buildLineMap();
+        }, 100);
     }
 
     /**
-     * 构建行号映射表
+     * 构建行号到元素的映射
      */
-    private buildLineMap(): void {
-        if (!this.previewEl) return;
-        
-        this.lineMap.clear();
-        
-        // 获取所有可映射的元素
-        const elements = this.previewEl.querySelectorAll(
-            '[data-source-line], h1, h2, h3, h4, h5, h6, p, li, pre, blockquote, table, hr'
-        );
-        
-        elements.forEach((el, index) => {
-            // 如果没有 data-source-line，使用元素索引作为近似值
-            const lineAttr = el.getAttribute('data-source-line');
-            const lineNumber = lineAttr ? parseInt(lineAttr, 10) : index;
-            
-            if (!isNaN(lineNumber)) {
-                this.lineMap.set(lineNumber, el as HTMLElement);
-            }
-        });
-    }
-
-    /**
-     * 尝试从 Markdown 内容注入源行号
-     * 利用 Obsidian 的 metadata 信息
-     */
-    private async injectSourceLineAttributes(currentFile: TFile): Promise<void> {
-        if (!this.previewEl || !currentFile) return;
+    private async buildLineMap(): Promise<void> {
+        if (!this.previewEl || !this.currentFile) return;
 
         try {
-            const content = await this.app.vault.cachedRead(currentFile);
+            const content = await this.app.vault.cachedRead(this.currentFile);
             const lines = content.split('\n');
             
-            // 映射标题到行号
-            let currentLine = 0;
-            const headings = this.previewEl.querySelectorAll('h1, h2, h3, h4, h5, h6');
+            // 清空旧映射
+            this.lineToElementMap.clear();
             
-            headings.forEach((heading) => {
-                const text = heading.textContent || '';
-                // 在源文件中找到匹配的行
-                for (let i = currentLine; i < lines.length; i++) {
-                    if (lines[i].includes(text.trim())) {
-                        heading.setAttribute('data-source-line', String(i));
-                        heading.setAttribute('data-scroll-anchor', 'true');
-                        currentLine = i + 1;
-                        break;
+            // 获取所有块级元素
+            const elements = this.previewEl.querySelectorAll(
+                'h1, h2, h3, h4, h5, h6, p, li, pre, blockquote, table, hr, .callout, .mp-content-section > div'
+            );
+
+            let lastHeadingLine = 0;
+            let elementIndex = 0;
+
+            elements.forEach((el) => {
+                const element = el as HTMLElement;
+                
+                // 尝试从 data-source-line 获取（如果之前已设置）
+                let lineNum = parseInt(element.getAttribute('data-source-line') || '-1');
+                
+                // 如果没有，尝试匹配标题
+                if (lineNum < 0) {
+                    const tagName = element.tagName.toLowerCase();
+                    if (tagName.match(/^h[1-6]$/)) {
+                        const text = element.textContent?.trim();
+                        if (text) {
+                            for (let i = lastHeadingLine; i < lines.length; i++) {
+                                if (lines[i].includes(text)) {
+                                    lineNum = i;
+                                    lastHeadingLine = i + 1;
+                                    break;
+                                }
+                            }
+                        }
                     }
                 }
+                
+                // 如果还没有，使用估算
+                if (lineNum < 0) {
+                    lineNum = lastHeadingLine + elementIndex;
+                }
+                
+                // 存储映射
+                if (lineNum >= 0 && lineNum < lines.length) {
+                    element.setAttribute('data-source-line', String(lineNum));
+                    this.lineToElementMap.set(lineNum, element);
+                }
+                
+                elementIndex++;
             });
 
-            // 给其他块级元素添加近似行号
-            this.approximateLineNumbers(lines);
+            console.log('[ScrollSync] 行号映射建立完成，共', this.lineToElementMap.size, '个元素');
         } catch (error) {
-            console.error('注入源行号失败:', error);
+            console.error('[ScrollSync] 建立行号映射失败:', error);
         }
-    }
-
-    /**
-     * 为没有精确映射的元素添加近似行号
-     */
-    private approximateLineNumbers(lines: string[]): void {
-        if (!this.previewEl) return;
-
-        // 获取所有块级元素
-        const blocks = this.previewEl.querySelectorAll(
-            'p, li, pre, blockquote, table, hr, .callout'
-        );
-
-        let lastHeadingLine = 0;
-        let blockIndex = 0;
-
-        blocks.forEach((block) => {
-            // 如果已经有精确行号，跳过
-            if (block.hasAttribute('data-source-line')) {
-                const line = parseInt(block.getAttribute('data-source-line')!, 10);
-                lastHeadingLine = line;
-                return;
-            }
-
-            // 基于前面最近的标题行号进行估算
-            const estimatedLine = lastHeadingLine + blockIndex;
-            block.setAttribute('data-source-line', String(Math.min(estimatedLine, lines.length - 1)));
-            block.setAttribute('data-scroll-anchor', 'true');
-            blockIndex++;
-        });
     }
 
     /**
      * 开始同步监听
      */
     private startSync(): void {
-        // 由于无法直接监听 Obsidian 编辑器滚动，
-        // 我们实现一个简化版：监听预览滚动，用户可以在预览中点击跳转
         if (!this.previewEl) return;
-
-        // 添加点击跳转功能
-        this.previewEl.addEventListener('click', this.handlePreviewClick);
         
-        // 监听滚动事件（用于记录当前可见元素）
-        this.previewEl.addEventListener('scroll', this.handlePreviewScroll);
+        // 监听预览滚动
+        this.previewEl.addEventListener('scroll', this.handlePreviewScroll, { passive: true });
+        
+        console.log('[ScrollSync] 同步滚动已开启');
     }
 
     /**
@@ -151,112 +133,118 @@ export class ScrollSyncManager {
      */
     private stopSync(): void {
         if (!this.previewEl) return;
-        this.previewEl.removeEventListener('click', this.handlePreviewClick);
         this.previewEl.removeEventListener('scroll', this.handlePreviewScroll);
+        console.log('[ScrollSync] 同步滚动已关闭');
     }
 
     /**
-     * 处理预览点击 - 点击元素时跳转到编辑器对应位置
+     * 处理预览滚动
      */
-    private handlePreviewClick = (e: MouseEvent): void => {
-        const target = e.target as HTMLElement;
-        const anchor = target.closest('[data-scroll-anchor]') as HTMLElement;
+    private handlePreviewScroll = (): void => {
+        if (!this.syncEnabled || this.isSyncing || !this.previewEl) return;
         
-        if (anchor && this.app.workspace.activeEditor?.editor) {
-            const line = anchor.getAttribute('data-source-line');
-            if (line) {
-                const lineNumber = parseInt(line, 10);
-                // 跳转到编辑器对应行
-                this.app.workspace.activeEditor.editor.setCursor({
+        const currentScrollTop = this.previewEl.scrollTop;
+        
+        // 避免微小滚动触发频繁同步
+        if (Math.abs(currentScrollTop - this.lastScrollTop) < 30) return;
+        
+        this.isSyncing = true;
+        this.lastScrollTop = currentScrollTop;
+        
+        // 找到当前最可见的元素
+        const visibleLine = this.findVisibleLine();
+        if (visibleLine !== null) {
+            this.syncEditorToLine(visibleLine);
+        }
+        
+        // 防抖
+        setTimeout(() => {
+            this.isSyncing = false;
+        }, 50);
+    };
+
+    /**
+     * 找到当前预览区域最顶部的可见行号
+     */
+    private findVisibleLine(): number | null {
+        if (!this.previewEl || this.lineToElementMap.size === 0) return null;
+
+        const previewRect = this.previewEl.getBoundingClientRect();
+        const viewportTop = previewRect.top + 50; // 留一点余量
+
+        let closestLine: number | null = null;
+        let closestDistance = Infinity;
+
+        this.lineToElementMap.forEach((element, line) => {
+            const rect = element.getBoundingClientRect();
+            const elementTop = rect.top;
+            
+            // 元素在视口上方或刚好在视口内
+            if (elementTop <= viewportTop) {
+                const distance = viewportTop - elementTop;
+                if (distance < closestDistance) {
+                    closestDistance = distance;
+                    closestLine = line;
+                }
+            }
+        });
+
+        // 如果没有找到（所有元素都在下方），返回第一个元素
+        if (closestLine === null && this.lineToElementMap.size > 0) {
+            const firstEntry = Array.from(this.lineToElementMap.entries())[0];
+            closestLine = firstEntry[0];
+        }
+
+        return closestLine;
+    }
+
+    /**
+     * 同步编辑器滚动到指定行
+     */
+    private syncEditorToLine(lineNumber: number): void {
+        // 获取当前活动的 Markdown 视图
+        const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (!activeView) return;
+
+        const editor = activeView.editor;
+        if (!editor) return;
+
+        // 设置光标到目标行
+        try {
+            // 先获取当前光标位置
+            const currentCursor = editor.getCursor();
+            
+            // 只有当目标行与当前行差异较大时才跳转
+            if (Math.abs(currentCursor.line - lineNumber) > 3) {
+                editor.setCursor({
                     line: lineNumber,
                     ch: 0
                 });
+                
+                // 滚动编辑器使该行可见
+                editor.scrollIntoView({
+                    from: { line: lineNumber, ch: 0 },
+                    to: { line: lineNumber, ch: 0 }
+                }, true);
             }
-        }
-    };
-
-    /**
-     * 处理预览滚动 - 记录当前最可见的元素
-     */
-    private handlePreviewScroll = (): void => {
-        if (this.isScrolling || !this.previewEl) return;
-        
-        this.isScrolling = true;
-        requestAnimationFrame(() => {
-            this.updateVisibleAnchor();
-            this.isScrolling = false;
-        });
-    };
-
-    /**
-     * 更新当前可见的锚点
-     */
-    private updateVisibleAnchor(): void {
-        if (!this.previewEl) return;
-
-        const anchors = this.previewEl.querySelectorAll('[data-scroll-anchor]');
-        let closestAnchor: HTMLElement | null = null;
-        let closestDistance = Infinity;
-
-        anchors.forEach((anchor) => {
-            const rect = anchor.getBoundingClientRect();
-            const previewRect = this.previewEl!.getBoundingClientRect();
-            const distance = Math.abs(rect.top - previewRect.top);
-
-            if (rect.top >= previewRect.top && distance < closestDistance) {
-                closestDistance = distance;
-                closestAnchor = anchor as HTMLElement;
-            }
-        });
-
-        // 高亮当前可见元素（可选）
-        anchors.forEach(a => (a as HTMLElement).classList.remove('mp-scroll-active'));
-        if (closestAnchor) {
-            (closestAnchor as HTMLElement).classList.add('mp-scroll-active');
+        } catch (error) {
+            console.error('[ScrollSync] 同步编辑器失败:', error);
         }
     }
 
     /**
-     * 滚动到指定行号
+     * 手动同步到指定行（用于点击跳转）
      */
     scrollToLine(lineNumber: number): void {
-        if (!this.previewEl) return;
-
-        const element = this.lineMap.get(lineNumber);
-        if (element) {
-            element.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        } else {
-            // 如果没有精确匹配，找最近的
-            let closestLine = 0;
-            let minDiff = Infinity;
-            
-            this.lineMap.forEach((_, line) => {
-                const diff = Math.abs(line - lineNumber);
-                if (diff < minDiff) {
-                    minDiff = diff;
-                    closestLine = line;
-                }
-            });
-
-            const closestElement = this.lineMap.get(closestLine);
-            if (closestElement) {
-                closestElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
-            }
-        }
+        if (!this.syncEnabled) return;
+        this.syncEditorToLine(lineNumber);
     }
 
     /**
      * 获取当前可见的行号
      */
     getCurrentVisibleLine(): number | null {
-        if (!this.previewEl) return null;
-
-        const activeElement = this.previewEl.querySelector('.mp-scroll-active');
-        if (activeElement) {
-            const line = activeElement.getAttribute('data-source-line');
-            return line ? parseInt(line, 10) : null;
-        }
-        return null;
+        return this.findVisibleLine();
     }
 
     /**
@@ -264,7 +252,6 @@ export class ScrollSyncManager {
      */
     destroy(): void {
         this.stopSync();
-        this.observer?.disconnect();
-        this.lineMap.clear();
+        this.lineToElementMap.clear();
     }
 }
