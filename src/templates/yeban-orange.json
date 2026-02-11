@@ -49,9 +49,9 @@
         "image": "max-width: 100%; height: auto; margin: 1em auto; display: block;",
         "link": "color: #ef7060; text-decoration: none; border-bottom: 1px solid #ef7060; transition: all 0.2s ease;",
         "emphasis": {
-            "strong": "font-weight: bold; color: #4a4a4a;",
-            "em": "font-style: italic; color: #4a4a4a;",
-            "del": "text-decoration: line-through; color: #4a4a4a;"
+            "strong": "font-weight: bold; color: #ef7060;",
+            "em": "font-style: italic; color: #f18070;",
+            "del": "text-decoration: line-through; color: #f39080;"
         },
         "table": {
             "container": "width: 100%; margin: 1em 0; border-collapse: collapse; border: 1px solid #ffe8e6;",

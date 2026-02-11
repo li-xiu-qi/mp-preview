@@ -649,13 +649,46 @@ export class CreateTemplateModal extends Modal {
         });
 
         new Setting(emphasisContent)
-            .setName('粗体样式')
-            .setDesc('设置粗体文本的样式')
+            .setName('粗体颜色')
+            .setDesc('设置粗体文本的颜色')
             .addColorPicker(color => {
                 const currentColor = styles.emphasis.strong.match(/color:\s*(#[a-fA-F0-9]+)/)?.[1];
                 color.setValue(currentColor)
                     .onChange(value => {
                         styles.emphasis.strong = styles.emphasis.strong.replace(/color:\s*#[a-fA-F0-9]+/, `color: ${value}`);
+                    });
+            });
+
+        // 添加粗体字体设置
+        new Setting(emphasisContent)
+            .setName('粗体字体')
+            .setDesc('设置粗体文本的字体（继承当前字体或使用指定字体）')
+            .addDropdown(dropdown => {
+                const fontOptions: Record<string, string> = {
+                    'inherit': '继承当前字体',
+                    '-apple-system': '系统默认',
+                    'LXGWWenKai, -apple-system': '霞鹜文楷',
+                    'Source Han Serif CN, serif': '思源宋体',
+                    'Source Han Sans CN, sans-serif': '思源黑体',
+                    'Microsoft YaHei, sans-serif': '微软雅黑',
+                    'PingFang SC, -apple-system': '苹方',
+                    'SimSun, serif': '宋体',
+                };
+                dropdown.addOptions(fontOptions);
+                const currentFont = styles.emphasis.strong.match(/font-family:\s*([^;]+)/)?.[1]?.trim() || 'inherit';
+                dropdown.setValue(currentFont)
+                    .onChange(value => {
+                        if (value === 'inherit') {
+                            // 移除 font-family 设置
+                            styles.emphasis.strong = styles.emphasis.strong.replace(/font-family:\s*[^;]+;?/, '');
+                        } else {
+                            // 添加或替换 font-family
+                            if (styles.emphasis.strong.match(/font-family:\s*[^;]+/)) {
+                                styles.emphasis.strong = styles.emphasis.strong.replace(/font-family:\s*[^;]+/, `font-family: ${value}`);
+                            } else {
+                                styles.emphasis.strong += ` font-family: ${value};`;
+                            }
+                        }
                     });
             });
 
