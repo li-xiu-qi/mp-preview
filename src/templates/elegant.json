@@ -48,7 +48,7 @@
         "image": "max-width: 100%; height: auto; margin: 1em auto; display: block;",
         "link": "color: #805AD5; text-decoration: none; border-bottom: 1px solid #9F7AEA; transition: all 0.2s ease;",
         "emphasis": {
-            "strong": "font-weight: bold; color: #553C9A;",
+            "strong": "font-weight: bold; color: #805AD5;",
             "em": "font-style: italic; color: #805AD5;",
             "del": "text-decoration: line-through; color: #9F7AEA;"
         },
