@@ -49,14 +49,26 @@ export class SettingsManager {
         if (!savedData) {
             savedData = {};
         }
-        if (!savedData.templates || savedData.templates.length === 0) {
-            const { templates } = await import('../templates');
-            savedData.templates = Object.values(templates).map(template => ({
-                ...template,
-                isPreset: true,
-                isVisible: true  // 默认可见
-            }));
+        
+        // 始终从代码加载最新的预设模板（确保样式更新能够生效）
+        const { templates } = await import('../templates');
+        const presetTemplates = Object.values(templates).map((template: any) => ({
+            ...template,
+            isPreset: true,
+            isVisible: true  // 默认可见
+        }));
+        
+        // 如果有已保存的模板，保留用户的可见性设置
+        if (savedData.templates && savedData.templates.length > 0) {
+            const visibilityMap = new Map(savedData.templates.map((t: Template) => [t.id, t.isVisible]));
+            presetTemplates.forEach((template: Template) => {
+                if (visibilityMap.has(template.id)) {
+                    template.isVisible = visibilityMap.get(template.id) as boolean | undefined;
+                }
+            });
         }
+        savedData.templates = presetTemplates;
+        
         if (!savedData.customTemplates) {
             savedData.customTemplates = [];
         }

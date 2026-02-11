@@ -180,14 +180,24 @@ export class TemplateManager {
         });
 
         // 应用强调样式（修复加粗字体：强制使用当前选中的字体）
+        const emphasis = styles.emphasis || {};
+        const strongStyle = emphasis.strong || 'font-weight: bold; color: inherit;';
+        const emStyle = emphasis.em || 'font-style: italic; color: inherit;';
+        const delStyle = emphasis.del || 'text-decoration: line-through; color: inherit;';
+        
+        // 确保颜色应用 !important 以覆盖 Obsidian 默认样式
+        const strongStyleWithImportant = strongStyle.replace(/color:\s*([^;]+);/, 'color: $1 !important;');
+        const emStyleWithImportant = emStyle.replace(/color:\s*([^;]+);/, 'color: $1 !important;');
+        const delStyleWithImportant = delStyle.replace(/color:\s*([^;]+);/, 'color: $1 !important;');
+        
         element.querySelectorAll('strong').forEach(el => {
-            el.setAttribute('style', `${styles.emphasis.strong} font-family: ${this.currentFont} !important;`);
+            el.setAttribute('style', `${strongStyleWithImportant} font-family: ${this.currentFont} !important;`);
         });
         element.querySelectorAll('em').forEach(el => {
-            el.setAttribute('style', styles.emphasis.em);
+            el.setAttribute('style', `${emStyleWithImportant} font-family: ${this.currentFont};`);
         });
         element.querySelectorAll('del').forEach(el => {
-            el.setAttribute('style', styles.emphasis.del);
+            el.setAttribute('style', delStyleWithImportant);
         });
 
         // 应用表格样式（内容表格，非包裹表格）
